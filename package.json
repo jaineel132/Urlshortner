@@ -1,6 +1,7 @@
 {
   "name": "url",
   "version": "1.0.0",
+  "type": "module",
   "description": "A backend-focused URL shortener project built as part of my backend engineering roadmap.",
   "main": "index.js",
   "scripts": {
@@ -13,9 +14,13 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
   "bugs": {
     "url": "https://github.com/jaineel132/Urlshortner/issues"
   },
-  "homepage": "https://github.com/jaineel132/Urlshortner#readme"
+  "homepage": "https://github.com/jaineel132/Urlshortner#readme",
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "pg": "^8.23.0"
+  }
 }
