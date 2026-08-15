@@ -21,3 +21,5 @@ A backend-focused URL shortener project built as part of my backend engineering 
 - Analytics
 - Testing
 - Dockerizationp
+
+Git workflow practice.
