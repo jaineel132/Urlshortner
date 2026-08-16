@@ -1,4 +1,4 @@
-import {shortenURL,getOgURL} from "../services/urlService.js";
+import {shortenURL,getOgURL,deleteShortURL} from "../services/urlService.js";
 
 async function shortenURLController(req, res) {
     const { original_url, custom_alias, expires_at } = req.body;
@@ -34,9 +34,25 @@ async function getOriginalURLController(req, res) {
 }
 
 
+async function deleteShortURLController(req, res) {
+    const {shortcode} = req.params
+    try{
+        const result = await deleteShortURL(shortcode);
+        res.status(200).json({ message: 'Short URL deleted successfully' });
+    }
+    catch(error){
+        if(error.statusCode){
+            res.status(error.statusCode).json({ error: error.message });
+        }
+        else{
+            res.status(500).json({ error: 'An error occurred while deleting the short URL' });
+        }
+}
+}
+
 
 function healthCheck(req, res) {
     res.status(200).json({ Status: "OKKKKK" });
 }
 
-export { healthCheck , shortenURLController, getOriginalURLController };
+export { healthCheck , shortenURLController, getOriginalURLController, deleteShortURLController };

@@ -1,5 +1,5 @@
 import {generateShortCode} from '../utils/generateShortCode.js';
-import {saveURL ,getURLByShortCode,updateClickCount} from '../repositories/urlRepository.js';
+import {saveURL ,getURLByShortCode,updateClickCount,deleteURL} from '../repositories/urlRepository.js';
 
 
 async function shortenURL(original_url, custom_alias, expires_at) {
@@ -55,4 +55,24 @@ async function getOgURL(shortcode){
     }   
 }
 
-export  {shortenURL , getOgURL}
+async function deleteShortURL(shortcode){
+    try{
+        const result = await deleteURL(shortcode);
+        if(result === 1){
+            return {message: 'Shortcode deleted successfully'};
+        }
+        else{
+            const notFoundError = new Error('Shortcode not found');
+            notFoundError.statusCode = 404;
+            throw notFoundError;
+        }
+    }
+    catch(error){
+        console.error('Error deleting URL from the database:', error);
+        throw error;
+    }
+}
+
+
+
+export  {shortenURL , getOgURL,deleteShortURL}

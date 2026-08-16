@@ -30,4 +30,16 @@ async function updateClickCount(shortcode){
         throw error;
     }
 }
-export { saveURL  , getURLByShortCode ,updateClickCount };
+
+async function deleteURL(shortcode){
+    try{
+        const result = await pool.query('delete from urls where short_code=$1',[shortcode])
+        return result.rowCount
+    }
+    catch(error){
+        console.error('Error deleting URL from the database:', error);
+        throw error;
+    }
+}
+
+export { saveURL  , getURLByShortCode ,updateClickCount , deleteURL};
