@@ -6,7 +6,17 @@ async function saveURL(original_url, short_code, expires_at) {
         return result.rows[0];
     } catch (error) {
         console.error('Error saving URL to the database:', error);
-        console.log( error);
         throw error;
     }}
-export { saveURL };
+
+async function getURLByShortCode(shortcode){
+    try{
+        const result = await pool.query('select * from urls where short_code=$1',[shortcode])
+        return result.rows[0]
+    }
+    catch(error){
+        console.error('Error retrieving URL from the database:', error);
+        throw error;
+    }
+}
+export { saveURL  , getURLByShortCode };

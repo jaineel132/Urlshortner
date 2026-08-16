@@ -1,4 +1,4 @@
-import {shortenURL} from "../services/urlService.js";
+import {shortenURL,getOgURL} from "../services/urlService.js";
 
 async function shortenURLController(req, res) {
     const { original_url, custom_alias, expires_at } = req.body;
@@ -17,8 +17,26 @@ async function shortenURLController(req, res) {
 
 }
 
+async function getOriginalURLController(req, res) {
+    const { shortcode } = req.params;
+    try{
+        const result = await getOgURL(shortcode);
+        res.redirect(result.original_url);
+    }
+    catch(error) {
+        if(error.statusCode){
+            res.status(error.statusCode).json({ error: error.message });
+        }
+        else{
+            res.status(500).json({ error: 'An error occurred while retrieving the original URL' });
+        }
+    }
+}
+
+
+
 function healthCheck(req, res) {
     res.status(200).json({ Status: "OKKKKK" });
 }
 
-export { healthCheck , shortenURLController};
+export { healthCheck , shortenURLController, getOriginalURLController };

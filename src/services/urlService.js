@@ -1,5 +1,6 @@
 import {generateShortCode} from '../utils/generateShortCode.js';
-import {saveURL} from '../repositories/urlRepository.js';
+import {saveURL , getURLByShortCode} from '../repositories/urlRepository.js';
+
 
 async function shortenURL(original_url, custom_alias, expires_at) {
     try{ if (!custom_alias) {
@@ -29,5 +30,22 @@ async function shortenURL(original_url, custom_alias, expires_at) {
     throw error;
 }
 }
+async function getOgURL(shortcode){
+    try{
+        const result = await getURLByShortCode(shortcode);
+        if (result === undefined){
+            const notFoundError = new Error('Shortcode not found');
+            notFoundError.statusCode = 404;
+            throw notFoundError;
+        }
+        else{
+            return result
+        }
+    }
+    catch(error){
+        console.error('Error retrieving URL from the database:', error);
+        throw error;
+    }   
+}
 
-export  {shortenURL} ;
+export  {shortenURL , getOgURL}
