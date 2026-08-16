@@ -1,5 +1,5 @@
 import {generateShortCode} from '../utils/generateShortCode.js';
-import {saveURL , getURLByShortCode} from '../repositories/urlRepository.js';
+import {saveURL ,getURLByShortCode,updateClickCount} from '../repositories/urlRepository.js';
 
 
 async function shortenURL(original_url, custom_alias, expires_at) {
@@ -33,13 +33,20 @@ async function shortenURL(original_url, custom_alias, expires_at) {
 async function getOgURL(shortcode){
     try{
         const result = await getURLByShortCode(shortcode);
-        if (result === undefined){
+
+        if (result === undefined || result === null) {
             const notFoundError = new Error('Shortcode not found');
             notFoundError.statusCode = 404;
             throw notFoundError;
         }
-        else{
-            return result
+        else if (result.expires_at < new Date() && result.expires_at !== null){
+            const expiredError = new Error('Shortcode has expired');
+            expiredError.statusCode = 410;
+            throw expiredError;
+        }
+        else {
+           const updatedRow = await updateClickCount(shortcode);
+           return updatedRow;  
         }
     }
     catch(error){

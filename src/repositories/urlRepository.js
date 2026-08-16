@@ -19,4 +19,15 @@ async function getURLByShortCode(shortcode){
         throw error;
     }
 }
-export { saveURL  , getURLByShortCode };
+
+async function updateClickCount(shortcode){
+    try{
+        const result = await pool.query('update urls set click_count = click_count + 1 where short_code=$1 returning *',[shortcode])
+        return result.rows[0]
+    }
+    catch(error){
+        console.error('Error updating click count in the database:', error);
+        throw error;
+    }
+}
+export { saveURL  , getURLByShortCode ,updateClickCount };
