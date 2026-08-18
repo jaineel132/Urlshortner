@@ -1,22 +1,64 @@
-    function validateShorten(req, res, next) {
-        try{
-            const original_url = req.body.original_url;
+function validateShorten(req, res, next) {
+    const { original_url, custom_alias, expires_at } = req.body;
 
-            if(typeof original_url !== "string"){
-                return res.status(400).json({ error: 'Original URL must be a string' });
-            }
-            else if (original_url.trim() === '') {
-                return res.status(400).json({ error: 'Original URL is required' });
-            }
-            const url = new URL(original_url);
-            if(url.protocol !== "http:" && url.protocol !== "https:"){
-                return res.status(400).json({ error: 'Original URL must be a valid HTTP or HTTPS URL' });
-            }
-            next();
+    // -------------------------
+    // 1. Validate original_url
+    // -------------------------
+
+    if (typeof original_url !== "string") {
+        return res.status(400).json({
+            error: "Original URL must be a string"
+        });
+    }
+
+    if (original_url.trim() === "") {
+        return res.status(400).json({
+            error: "Original URL is required"
+        });
+    }
+
+    try {
+        const url = new URL(original_url);
+
+        if (url.protocol !== "http:" && url.protocol !== "https:") {
+            return res.status(400).json({
+                error: "Original URL must use HTTP or HTTPS"
+            });
         }
-        catch(error){
-            res.status(400).json({ error: 'Invalid URL format' });
+    } catch {
+        return res.status(400).json({
+            error: "Invalid URL format"
+        });
+    }
+
+    // -------------------------
+    // 2. Validate custom_alias
+    // -------------------------
+
+    if (custom_alias !== undefined) {
+
+        if (typeof custom_alias !== "string") {
+            return res.status(400).json({
+                error: "Custom alias must be a string"
+            });
+        }
+
+        if (custom_alias.length < 4 || custom_alias.length > 30) {
+            return res.status(400).json({
+                error: "Custom alias must be between 4 and 30 characters"
+            });
+        }
+
+        const aliasPattern = /^[A-Za-z0-9_-]+$/;
+
+        if (!aliasPattern.test(custom_alias)) {
+            return res.status(400).json({
+                error: "Custom alias can only contain letters, numbers, hyphens, and underscores"
+            });
         }
     }
 
-    export {validateShorten}
+    next();
+}
+
+export { validateShorten };
