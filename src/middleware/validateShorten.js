@@ -1,4 +1,4 @@
-function validateShortenURL(req, res, next) {
+function validateShorten(req, res, next) {
     const { original_url, custom_alias, expires_at } = req.body;
 
     // 1. Validate original_url
@@ -77,4 +77,4 @@ function validateShortenURL(req, res, next) {
     next();
 }
 
-export { validateShortenURL };
+export { validateShorten };

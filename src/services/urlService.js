@@ -3,33 +3,73 @@ import {saveURL ,getURLByShortCode,updateClickCount,deleteURL} from '../reposito
 
 
 async function shortenURL(original_url, custom_alias, expires_at) {
-    try{ if (!custom_alias) {
+    const maxRetries = 3;
+
+    // Custom alias: one attempt only
+    if (custom_alias) {
+        try {
+            const savedUrl = await saveURL(
+                original_url,
+                custom_alias,
+                expires_at
+            );
+
+            return {
+                short_code: savedUrl.short_code,
+                expires_at: savedUrl.expires_at
+            };
+        } catch (error) {
+            if (
+                error.code === "23505" &&
+                error.constraint === "urls_short_code_key"
+            ) {
+                const appError = new Error(
+                    "Custom alias already exists. Please choose a different alias."
+                );
+
+                appError.statusCode = 409;
+                throw appError;
+            }
+
+            throw error;
+        }
+    }
+
+    // No custom alias: generate and retry if collision occurs
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
         const shortcode = generateShortCode();
-        const savedurl = await saveURL(original_url, shortcode, expires_at);
-        return {short_code: savedurl.short_code, expires_at: savedurl.expires_at};
+
+        try {
+            const savedUrl = await saveURL(
+                original_url,
+                shortcode,
+                expires_at
+            );
+
+            return {
+                short_code: savedUrl.short_code,
+                expires_at: savedUrl.expires_at
+            };
+        } catch (error) {
+            if (
+                error.code === "23505" &&
+                error.constraint === "urls_short_code_key"
+            ) {
+                continue;
+            }
+
+            throw error;
+        }
     }
-    else{
-        const savedurl = await saveURL(original_url, custom_alias, expires_at);
-        return {short_code: savedurl.short_code, expires_at: savedurl.expires_at};
-    }}
-   catch (error) {
-    if (
-        error.code === '23505' &&
-        error.constraint === 'urls_short_code_key' &&
-        custom_alias
-    ) {
-        const appError = new Error(
-            'Custom alias already exists. Please choose a different alias.'
-        );
 
-        appError.statusCode = 409;
+    const appError = new Error(
+        "Could not generate a unique short code. Please try again."
+    );
 
-        throw appError;
-    }
-
-    throw error;
+    appError.statusCode = 500;
+    throw appError;
 }
-}
+
 async function getOgURL(shortcode){
     try{
         const result = await getURLByShortCode(shortcode);
