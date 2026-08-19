@@ -1,10 +1,7 @@
-function validateShorten(req, res, next) {
+function validateShortenURL(req, res, next) {
     const { original_url, custom_alias, expires_at } = req.body;
 
-    // -------------------------
     // 1. Validate original_url
-    // -------------------------
-
     if (typeof original_url !== "string") {
         return res.status(400).json({
             error: "Original URL must be a string"
@@ -31,12 +28,8 @@ function validateShorten(req, res, next) {
         });
     }
 
-    // -------------------------
-    // 2. Validate custom_alias
-    // -------------------------
-
+    // 2. Validate custom_alias if provided
     if (custom_alias !== undefined) {
-
         if (typeof custom_alias !== "string") {
             return res.status(400).json({
                 error: "Custom alias must be a string"
@@ -58,7 +51,30 @@ function validateShorten(req, res, next) {
         }
     }
 
+    // 3. Validate expires_at if provided
+    if (expires_at !== undefined) {
+        if (typeof expires_at !== "string" || expires_at.trim() === "") {
+            return res.status(400).json({
+                error: "expires_at must be a valid date"
+            });
+        }
+
+        const expiryDate = new Date(expires_at);
+
+        if (Number.isNaN(expiryDate.getTime())) {
+            return res.status(400).json({
+                error: "expires_at must be a valid date"
+            });
+        }
+
+        if (expiryDate <= new Date()) {
+            return res.status(400).json({
+                error: "expires_at must be in the future"
+            });
+        }
+    }
+
     next();
 }
 
-export { validateShorten };
+export { validateShortenURL };
