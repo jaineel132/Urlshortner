@@ -2,6 +2,7 @@ import express from "express";
 import dotenv from 'dotenv'
 import pool from './src/db/connection.js';
 import shortUrlRouter from './src/routes/shortUrl.js';
+import { errorHandler } from "./src/middleware/errorHandler.js";
 
 dotenv.config();
 
@@ -9,6 +10,7 @@ const app = express();
 
 app.use(express.json());
 app.use('/', shortUrlRouter);
+app.use(errorHandler);
 
 app.listen(process.env.PORT, () => {
     pool.query('SELECT NOW()',(err) => {
