@@ -1,25 +1,19 @@
-# URL Shortener
+URL Shortener API
 
-A backend-focused URL shortener project built as part of my backend engineering roadmap.
+Features
+- Shorten URLs
+- Custom aliases
+- Expiration
+- Click tracking
+- Delete URLs
 
-## Planned Stack
-
+Tech
 - Node.js
-- Express.js
+- Express
 - PostgreSQL
-- Redis
-- Docker
 
-## Planned Features
-
-- Create short URLs
-- Redirect to original URLs
-- URL expiration
-- Authentication
-- Rate limiting
-- Caching
-- Analytics
-- Testing
-- Dockerizationp
-
-Git workflow practice.
+Endpoints
+POST   /shorten
+GET    /:shortcode
+DELETE /:shortcode
+GET    /health

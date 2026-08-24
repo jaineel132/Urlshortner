@@ -37,7 +37,7 @@ async function deleteShortURLController(req, res,next) {
 
 
 function healthCheck(req, res) {
-    res.status(200).json({ Status: "OKKKKK" });
+    res.status(200).json({ Status: "OK" });
 }
 
 export { healthCheck , shortenURLController, getOriginalURLController, deleteShortURLController };
