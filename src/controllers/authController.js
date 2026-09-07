@@ -1,4 +1,4 @@
-import { registerUser } from "../services/userService.js";
+import { registerUser, loginUser } from "../services/userService.js";
 
 async function registerController(req, res, next) {
     const { email, password } = req.body;
@@ -10,4 +10,14 @@ async function registerController(req, res, next) {
     }
 }
 
-export { registerController };
+async function loginController(req, res, next) {
+    const { email, password } = req.body;
+    try {
+        const tokens = await loginUser(email, password);
+        res.status(200).json(tokens);
+    } catch (error) {
+        next(error);
+    }
+}
+
+export { registerController, loginController };

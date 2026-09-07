@@ -13,4 +13,17 @@ async function createUser(email, passwordHash) {
     }
 }
 
-export { createUser };
+async function findUserByEmail(email) {
+    try {
+        const result = await pool.query(
+            'SELECT * FROM users WHERE email = $1',
+            [email]
+        );
+        return result.rows[0];
+    } catch (error) {
+        console.error('Error finding user by email in the database:', error);
+        throw error;
+    }
+}
+
+export { createUser, findUserByEmail };

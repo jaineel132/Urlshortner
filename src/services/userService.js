@@ -1,5 +1,6 @@
 import bcrypt from 'bcrypt';
-import { createUser } from '../repositories/userRepository.js';
+import { createUser, findUserByEmail } from '../repositories/userRepository.js';
+import { generateAccessToken, generateRefreshToken } from './tokenService.js';
 
 async function registerUser(email, password) {
     const hash = await bcrypt.hash(password, 10);
@@ -16,4 +17,21 @@ async function registerUser(email, password) {
     }
 }
 
-export { registerUser };
+async function loginUser(email, password) {
+    const user = await findUserByEmail(email);
+
+    const valid = user && await bcrypt.compare(password, user.password_hash);
+
+    if (!valid) {
+        const appError = new Error("Invalid email or password");
+        appError.statusCode = 401;
+        throw appError;
+    }
+
+    return {
+        accessToken: generateAccessToken(user.id),
+        refreshToken: generateRefreshToken(user.id)
+    };
+}
+
+export { registerUser, loginUser };
