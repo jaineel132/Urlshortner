@@ -1,8 +1,8 @@
 import pool from '../db/connection.js';
 
-async function saveURL(original_url, short_code, expires_at) {
+async function saveURL(original_url, short_code, expires_at, user_id) {
     try {
-        const result = await pool.query('insert into urls (original_url, short_code, expires_at) values ($1, $2, $3) returning *', [original_url, short_code, expires_at]);
+        const result = await pool.query('insert into urls (original_url, short_code, expires_at, user_id) values ($1, $2, $3, $4) returning *', [original_url, short_code, expires_at, user_id]);
         return result.rows[0];
     } catch (error) {
         console.error('Error saving URL to the database:', error);
@@ -31,9 +31,9 @@ async function updateClickCount(shortcode){
     }
 }
 
-async function deleteURL(shortcode){
+async function deleteURL(shortcode, userId){
     try{
-        const result = await pool.query('delete from urls where short_code=$1',[shortcode])
+        const result = await pool.query('delete from urls where short_code=$1 and user_id=$2',[shortcode, userId])
         return result.rowCount
     }
     catch(error){
@@ -42,4 +42,15 @@ async function deleteURL(shortcode){
     }
 }
 
-export { saveURL  , getURLByShortCode ,updateClickCount , deleteURL};
+async function getURLsByUserId(userId){
+    try{
+        const result = await pool.query('select * from urls where user_id=$1 order by id',[userId])
+        return result.rows
+    }
+    catch(error){
+        console.error('Error retrieving URLs from the database:', error);
+        throw error;
+    }
+}
+
+export { saveURL  , getURLByShortCode ,updateClickCount , deleteURL, getURLsByUserId};

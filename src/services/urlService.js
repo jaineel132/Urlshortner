@@ -1,8 +1,8 @@
 import {generateShortCode} from '../utils/generateShortCode.js';
-import {saveURL ,getURLByShortCode,updateClickCount,deleteURL} from '../repositories/urlRepository.js';
+import {saveURL ,getURLByShortCode,updateClickCount,deleteURL,getURLsByUserId} from '../repositories/urlRepository.js';
 
 
-async function shortenURL(original_url, custom_alias, expires_at) {
+async function shortenURL(original_url, custom_alias, expires_at, user_id) {
     const maxRetries = 3;
 
     // Custom alias: one attempt only
@@ -11,7 +11,8 @@ async function shortenURL(original_url, custom_alias, expires_at) {
             const savedUrl = await saveURL(
                 original_url,
                 custom_alias,
-                expires_at
+                expires_at,
+                user_id
             );
 
             return {
@@ -43,7 +44,8 @@ async function shortenURL(original_url, custom_alias, expires_at) {
             const savedUrl = await saveURL(
                 original_url,
                 shortcode,
-                expires_at
+                expires_at,
+                user_id
             );
 
             return {
@@ -95,9 +97,9 @@ async function getOgURL(shortcode){
     }   
 }
 
-async function deleteShortURL(shortcode){
+async function deleteShortURL(shortcode, userId){
     try{
-        const result = await deleteURL(shortcode);
+        const result = await deleteURL(shortcode, userId);
         if(result === 1){
             return {message: 'Shortcode deleted successfully'};
         }
@@ -113,6 +115,9 @@ async function deleteShortURL(shortcode){
     }
 }
 
+async function getURLsByUser(userId){
+    return await getURLsByUserId(userId);
+}
 
 
-export  {shortenURL , getOgURL,deleteShortURL}
+export  {shortenURL , getOgURL,deleteShortURL, getURLsByUser}

@@ -1,9 +1,10 @@
-import {shortenURL,getOgURL,deleteShortURL} from "../services/urlService.js";
+import {shortenURL,getOgURL,deleteShortURL,getURLsByUser} from "../services/urlService.js";
 
 async function shortenURLController(req, res,next) {
     const { original_url, custom_alias, expires_at } = req.body;
+    const userId = req.user.id;
     try{
-     const result = await shortenURL(original_url, custom_alias, expires_at);
+     const result = await shortenURL(original_url, custom_alias, expires_at, userId);
             res.status(201).json({ short_url: process.env.BASE_URL+"/"+result.short_code ,expires_at: result.expires_at });
         }
     catch(error) {
@@ -26,8 +27,9 @@ async function getOriginalURLController(req, res,next) {
 
 async function deleteShortURLController(req, res,next) {
     const {shortcode} = req.params
+    const userId = req.user.id;
     try{
-        const result = await deleteShortURL(shortcode);
+        const result = await deleteShortURL(shortcode, userId);
         res.status(200).json({ message: 'Short URL deleted successfully' });
     }
     catch(error){
@@ -35,9 +37,19 @@ async function deleteShortURLController(req, res,next) {
 }
 }
 
+async function getURLsController(req, res, next) {
+    const userId = req.user.id;
+    try {
+        const urls = await getURLsByUser(userId);
+        res.status(200).json({ urls });
+    } catch (error) {
+        next(error);
+    }
+}
+
 
 function healthCheck(req, res) {
     res.status(200).json({ Status: "OK" });
 }
 
-export { healthCheck , shortenURLController, getOriginalURLController, deleteShortURLController };
+export { healthCheck , shortenURLController, getOriginalURLController, deleteShortURLController, getURLsController };
