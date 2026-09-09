@@ -2,7 +2,7 @@ import {generateShortCode} from '../utils/generateShortCode.js';
 import {saveURL ,getURLByShortCode,updateClickCount,deleteURL,getURLsByUserId} from '../repositories/urlRepository.js';
 
 
-async function shortenURL(original_url, custom_alias, expires_at, user_id) {
+async function shortenURL(original_url, custom_alias, expires_at, userId) {
     const maxRetries = 3;
 
     // Custom alias: one attempt only
@@ -12,7 +12,7 @@ async function shortenURL(original_url, custom_alias, expires_at, user_id) {
                 original_url,
                 custom_alias,
                 expires_at,
-                user_id
+                userId
             );
 
             return {
@@ -45,7 +45,7 @@ async function shortenURL(original_url, custom_alias, expires_at, user_id) {
                 original_url,
                 shortcode,
                 expires_at,
-                user_id
+                userId
             );
 
             return {
@@ -72,7 +72,7 @@ async function shortenURL(original_url, custom_alias, expires_at, user_id) {
     throw appError;
 }
 
-async function getOgURL(shortcode){
+async function getOriginalURL(shortcode){
     try{
         const result = await getURLByShortCode(shortcode);
 
@@ -120,4 +120,4 @@ async function getURLsByUser(userId){
 }
 
 
-export  {shortenURL , getOgURL,deleteShortURL, getURLsByUser}
+export  {shortenURL , getOriginalURL,deleteShortURL, getURLsByUser}

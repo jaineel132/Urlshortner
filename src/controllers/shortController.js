@@ -1,4 +1,4 @@
-import {shortenURL,getOgURL,deleteShortURL,getURLsByUser} from "../services/urlService.js";
+import {shortenURL,getOriginalURL,deleteShortURL,getURLsByUser} from "../services/urlService.js";
 
 async function shortenURLController(req, res,next) {
     const { original_url, custom_alias, expires_at } = req.body;
@@ -16,7 +16,7 @@ async function shortenURLController(req, res,next) {
 async function getOriginalURLController(req, res,next) {
     const { shortcode } = req.params;
     try{
-        const result = await getOgURL(shortcode);
+        const result = await getOriginalURL(shortcode);
         res.redirect(result.original_url);
     }
     catch(error) {
@@ -29,7 +29,7 @@ async function deleteShortURLController(req, res,next) {
     const {shortcode} = req.params
     const userId = req.user.id;
     try{
-        const result = await deleteShortURL(shortcode, userId);
+        await deleteShortURL(shortcode, userId);
         res.status(200).json({ message: 'Short URL deleted successfully' });
     }
     catch(error){
