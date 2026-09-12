@@ -137,7 +137,7 @@ async function deleteShortURL(shortcode, userId){
 }
 
 async function getURLsByUser(userId){
-    return await getURLsByUserId(userId);
+    return getURLsByUserId(userId);
 }
 
 

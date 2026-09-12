@@ -1,4 +1,4 @@
-function validateLogin(req, res, next) {
+function validateCredentials(req, res, next) {
     const { email, password } = req.body;
 
     if (email === undefined || typeof email !== "string") {
@@ -28,4 +28,18 @@ function validateLogin(req, res, next) {
     next();
 }
 
-export { validateLogin };
+function validateRegister(req, res, next) {
+    validateCredentials(req, res, () => {
+        const { password } = req.body;
+
+        if (password.length < 8) {
+            return res.status(400).json({
+                error: "Password must be at least 8 characters long"
+            });
+        }
+
+        next();
+    });
+}
+
+export { validateCredentials, validateRegister };
