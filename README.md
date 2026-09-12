@@ -1,8 +1,8 @@
-# URL Shortener API — V2
+# URL Shortener API — V3
 
-A backend URL shortening service built with Node.js, Express, and PostgreSQL.
+A backend URL shortening service built with Node.js, Express, and PostgreSQL, with Redis caching.
 
-V1 shortens URLs with custom aliases, expiration, and click tracking. **V2** adds user accounts on top of that: registration, login, bcrypt password hashing, JWT access + refresh tokens, JWT authentication middleware, protected routes, and per-user URL ownership — each user manages only their own links.
+V1 shortens URLs with custom aliases, expiration, and click tracking. **V2** adds user accounts: registration, login, bcrypt password hashing, JWT access + refresh tokens, JWT authentication middleware, protected routes, and per-user URL ownership. **V3** adds **Redis caching** for the public redirect (`GET /:shortcode`) using a cache-aside pattern — PostgreSQL remains the source of truth.
 
 ## Features
 
@@ -21,6 +21,9 @@ V1 shortens URLs with custom aliases, expiration, and click tracking. **V2** add
 - User-specific URL deletion
 - URL ownership isolation
 - PostgreSQL persistence
+- Redis cache-aside caching for public redirects
+- Cache invalidation on URL deletion
+- Graceful fallback to PostgreSQL when Redis is unavailable
 - Layered backend architecture
 
 ## Architecture
@@ -34,9 +37,9 @@ Controller
   ↓
 Service
   ↓
-Repository
+Repository / cache layer
   ↓
-PostgreSQL
+Redis / PostgreSQL
 ```
 
 | Layer | Responsibility |
@@ -44,11 +47,61 @@ PostgreSQL
 | **Route** | Maps HTTP paths to middleware + controllers (`src/routes/`) |
 | **Middleware** | Cross-cutting request checks: input validation, JWT authentication (`src/middleware/`) |
 | **Controller** | Reads request data, calls the service, builds HTTP responses, forwards errors to the global error handler (`src/controllers/`) |
-| **Service** | Business logic — shortcode collision retries, expiry checks, password hashing/comparison, error mapping (`src/services/`) |
-| **Repository** | Raw parameterized SQL only (`src/repositories/`) |
-| **PostgreSQL** | The database (pg `Pool` in `src/db/connection.js`) |
+| **Service** | Business logic — shortcode collision retries, expiry checks, cache-aside orchestration, password hashing/comparison, error mapping (`src/services/`) |
+| **Repository / cache layer** | Raw parameterized SQL (`src/repositories/`) plus Redis cache operations (`src/cache/`) |
+| **Redis** | Cache for URL lookups (`src/cache/redisClient.js`, `src/cache/urlCache.js`) |
+| **PostgreSQL** | The database — source of truth (pg `Pool` in `src/db/connection.js`) |
 
 Token generation (access + refresh JWTs) is centralized in `src/services/tokenService.js`.
+
+## Caching (Redis)
+
+`GET /:shortcode` (public redirect) is the only route served through the cache. `POST /shorten` does **not** warm the cache — the first redirect populates it through a normal cache miss.
+
+Cache-aside flow:
+
+```
+GET /:shortcode
+      ↓
+Redis GET "url:<shortcode>"
+      ↓
+   ┌───┴────┐
+  HIT      MISS
+   ↓         ↓
+parse      PostgreSQL
+JSON         ↓
+   ↓      URL found?
+   │       ↓
+   │   JSON.stringify
+   │       ↓
+   │   Redis SET + TTL
+   │       ↓
+   └───────┬───────┘
+           ↓
+     expiration check
+           ↓
+     click count update
+           ↓
+        redirect
+```
+
+Details:
+
+- **Key format** — `url:<shortcode>` (e.g. `url:abc123`, `url:HW8VKl`). The bare shortcode is never used as the key.
+- **Cached data** — only `{ original_url, expires_at }`, the minimum `GET /:shortcode` needs. Password hashes, tokens, and user data are never cached.
+- **TTL** — 60 seconds (`CACHE_TTL_SECONDS` in `src/cache/urlCache.js`), applied with Redis key expiration. This is the cache lifetime only; it is **not** the URL's business expiration.
+- **`expires_at` is authoritative** — a cached URL only redirects if `expires_at` is `NULL` or still in the future. A stale (expired) cached entry is invalidated and returns **410**, like V2.
+- **Cache hit** — no PostgreSQL lookup; `expires_at` is checked from the cached value, `click_count` is still incremented in PostgreSQL, then redirect.
+- **Cache miss** — PostgreSQL lookup. Missing shortcode → **404** (no Redis entry created). Expired shortcode → **410** (no cache entry, no click increment). Valid → JSON-serialized and stored with a 60s TTL, `click_count` incremented, redirect.
+- **Click counting is preserved** — every successful, non-expired redirect increments `click_count` in PostgreSQL, whether served from cache or from a miss.
+- **Delete invalidation** — `DELETE /:shortcode` removes `url:<shortcode>` from Redis **only after** the ownership-aware PostgreSQL delete succeeds; a zero-row delete still returns **404** and does not touch another user's cache entry.
+- **Malformed cached JSON** — if a cached value cannot be parsed or lacks the required fields, it is treated as a cache miss, the bad key is removed, and the request falls back to PostgreSQL.
+- **Redis unavailable** — Redis is an optimization, not the source of truth. If it is down or a Redis operation fails, the error is logged, Redis is skipped, and the request is served from PostgreSQL with normal V2 behavior (no 500s).
+
+Cache code lives in `src/cache/`:
+
+- `src/cache/redisClient.js` — the shared Redis connection (created once, connected at startup, reused for all requests — never connected/quit per request).
+- `src/cache/urlCache.js` — `getCachedURL`, `setCachedURL`, `invalidateCachedURL` + TTL and key-format constants.
 
 ## Authentication Flow
 
@@ -127,7 +180,7 @@ Client-supplied `user_id` (in the request body, query, or path) is never trusted
 | `POST` | `/auth/register` | Create an account |
 | `POST` | `/auth/login` | Log in, returns access + refresh tokens |
 | `GET` | `/health` | Health check |
-| `GET` | `/:shortcode` | Public redirect to the original URL |
+| `GET` | `/:shortcode` | Public redirect to the original URL (cache-aside for speed) |
 
 `GET /urls` is declared before `GET /:shortcode` in the router so `urls` is not treated as a shortcode.
 
@@ -234,6 +287,8 @@ Content-Type: application/json
 
 Constraints: `users.email` is UNIQUE, `urls.short_code` is UNIQUE, and `urls.user_id` is NOT NULL and references `users(id)`.
 
+PostgreSQL holds the authoritative state (URLs, ownership, `expires_at`, `click_count`). Redis is only a cache of `{ original_url, expires_at }` for public redirects.
+
 ## Environment Variables
 
 | Variable | Purpose |
@@ -245,6 +300,7 @@ Constraints: `users.email` is UNIQUE, `urls.short_code` is UNIQUE, and `urls.use
 | `DB_NAME` | PostgreSQL database name |
 | `PORT` | HTTP port the server listens on |
 | `BASE_URL` | Public base URL prefixing generated short URLs |
+| `REDIS_URL` | Redis connection URL (defaults to `redis://localhost:6379` if unset) |
 | `JWT_SECRET` | Secret used to sign access tokens |
 | `JWT_REFRESH_SECRET` | Secret used to sign refresh tokens |
 
@@ -266,7 +322,7 @@ Constraints: `users.email` is UNIQUE, `urls.short_code` is UNIQUE, and `urls.use
    cp .env.example .env
    ```
 
-   Fill in database credentials, `BASE_URL`, and generate two strong random `JWT_SECRET` / `JWT_REFRESH_SECRET` values.
+   Fill in database credentials, `BASE_URL`, and generate two strong random `JWT_SECRET` / `JWT_REFRESH_SECRET` values. `REDIS_URL` already defaults to `redis://localhost:6379`.
 
 3. **Create the PostgreSQL database** (adjust to your local setup)
 
@@ -274,7 +330,15 @@ Constraints: `users.email` is UNIQUE, `urls.short_code` is UNIQUE, and `urls.use
    psql -U postgres -c "CREATE DATABASE url_shortener;"
    ```
 
-4. **Apply the schema**
+4. **Start Redis** (e.g. with Docker)
+
+   ```
+   docker run --name urlshortener-redis -p 6379:6379 -d redis
+   ```
+
+   The app connects to `REDIS_URL` at startup. Redis is optional at runtime — if it is unreachable the server starts anyway and redirects are served from PostgreSQL (the cache is skipped).
+
+5. **Apply the schema**
 
    The `urls` table was created manually in V1 and has no migration file in this repo; recreate it with the schema shown in the [Database](#database) section:
 
@@ -298,17 +362,19 @@ Constraints: `users.email` is UNIQUE, `urls.short_code` is UNIQUE, and `urls.use
 
    `add_user_id_to_urls.sql` adds `user_id`, removes rows without an owner (V1 rows predate ownership), and enforces `NOT NULL` with a foreign key to `users(id)`.
 
-5. **Start the server**
+6. **Start the server**
 
    ```
    node server.js
    ```
 
-   The server verifies the database connection on startup.
+   The server verifies the PostgreSQL and Redis connections on startup and reports whether each is reachable.
 
 ## Testing
 
-The project has no automated test framework — behavior was verified manually against the live server with `curl` / REST requests. Verified cases:
+The project has no automated test framework — behavior was verified manually against the live server with `curl` / REST requests.
+
+**V2 cases (regression):**
 
 - Registration (success + duplicate email → 409)
 - Login (success, wrong password → 401, unknown email → 401)
@@ -316,9 +382,21 @@ The project has no automated test framework — behavior was verified manually a
 - Refresh token rejected when used as an access token → 401
 - Authenticated URL creation is stored with the JWT's `sub` as owner
 - `GET /urls` returns only the authenticated user's URLs
-- Destruction is ownership-protected (`DELETE ... WHERE short_code = $1 AND user_id = $2`)
+- Deletion is ownership-protected (`DELETE ... WHERE short_code = $1 AND user_id = $2`)
 - Cross-user deletion attempts are rejected and leave the target row intact
 - Public `GET /:shortcode` redirect works without authentication
+
+**V3 cases (caching):**
+
+- Cache miss: first redirect reads from PostgreSQL and creates `url:<shortcode>` in Redis
+- Cache hit: repeat redirect is served from Redis without a PostgreSQL lookup
+- TTL: `url:<shortcode>` gets a finite expiry (~60s)
+- Expired URL (`expires_at` in the past): returns 410, `click_count` does not increase, stale cache entries are invalidated and cannot redirect
+- Nonexistent shortcode: returns 404 and creates no Redis entry
+- Delete invalidation: deleting a URL removes both the PostgreSQL row and `url:<shortcode>`, and a later redirect returns 404
+- Cross-user delete: a non-owner's attempt returns 404 and leaves the owner's DB row and cached entry intact
+- Redis down: with the Redis container stopped, redirects still work from PostgreSQL and return no 500s; behavior recovers when Redis is restarted
+- Click counting: every valid redirect increments `click_count` (cache hits included); expired redirects never increment
 
 ## Security Notes
 
@@ -328,11 +406,10 @@ The project has no automated test framework — behavior was verified manually a
 - Access tokens are verified with **`jwt.verify` + `JWT_SECRET`**; `jwt.decode` is never used for authentication
 - Access and refresh tokens use **separate secrets**
 - URL operations are protected and ownership is enforced inside the SQL queries
+- Only URL redirect data (`original_url`, `expires_at`) is cached — never passwords, password hashes, tokens, or user records
+- Cache-busting on delete prevents one user's cached URL from surviving after another user's actions
 - Secrets are stored in environment variables (`.env` is git-ignored)
 
 ---
 
-This README documents **URL Shortener V2**.
-
-
-V3 in progress
+This README documents **URL Shortener V3**.
