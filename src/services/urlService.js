@@ -1,5 +1,10 @@
 import {generateShortCode} from '../utils/generateShortCode.js';
 import {saveURL ,getURLByShortCode,updateClickCount,deleteURL,getURLsByUserId} from '../repositories/urlRepository.js';
+import {getCachedURL, setCachedURL, invalidateCachedURL} from '../cache/urlCache.js';
+
+function isExpired(expiresAt) {
+    return expiresAt !== null && expiresAt !== undefined && new Date(expiresAt) < new Date();
+}
 
 
 async function shortenURL(original_url, custom_alias, expires_at, userId) {
@@ -74,6 +79,20 @@ async function shortenURL(original_url, custom_alias, expires_at, userId) {
 
 async function getOriginalURL(shortcode){
     try{
+        const cached = await getCachedURL(shortcode);
+
+        if (cached) {
+            if (isExpired(cached.expires_at)) {
+                await invalidateCachedURL(shortcode);
+                const expiredError = new Error('Shortcode has expired');
+                expiredError.statusCode = 410;
+                throw expiredError;
+            }
+
+            await updateClickCount(shortcode);
+            return cached;
+        }
+
         const result = await getURLByShortCode(shortcode);
 
         if (result === undefined || result === null) {
@@ -81,12 +100,13 @@ async function getOriginalURL(shortcode){
             notFoundError.statusCode = 404;
             throw notFoundError;
         }
-        else if (result.expires_at < new Date() && result.expires_at !== null){
+        else if (isExpired(result.expires_at)){
             const expiredError = new Error('Shortcode has expired');
             expiredError.statusCode = 410;
             throw expiredError;
         }
         else {
+           await setCachedURL(shortcode, { original_url: result.original_url, expires_at: result.expires_at });
            const updatedRow = await updateClickCount(shortcode);
            return updatedRow;  
         }
@@ -101,6 +121,7 @@ async function deleteShortURL(shortcode, userId){
     try{
         const result = await deleteURL(shortcode, userId);
         if(result === 1){
+            await invalidateCachedURL(shortcode);
             return {message: 'Shortcode deleted successfully'};
         }
         else{
