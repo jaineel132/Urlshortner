@@ -1,0 +1,8 @@
+CREATE TABLE IF NOT EXISTS urls (
+  id SERIAL PRIMARY KEY,
+  original_url TEXT NOT NULL,
+  short_code TEXT UNIQUE NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW() NOT NULL,
+  expires_at TIMESTAMP,
+  click_count INTEGER DEFAULT 0 NOT NULL
+);

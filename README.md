@@ -338,29 +338,17 @@ PostgreSQL holds the authoritative state (URLs, ownership, `expires_at`, `click_
 
    The app connects to `REDIS_URL` at startup. Redis is optional at runtime — if it is unreachable the server starts anyway and redirects are served from PostgreSQL (the cache is skipped).
 
-5. **Apply the schema**
-
-   The `urls` table was created manually in V1 and has no migration file in this repo; recreate it with the schema shown in the [Database](#database) section:
-
-   ```sql
-   CREATE TABLE IF NOT EXISTS urls (
-     id SERIAL PRIMARY KEY,
-     original_url TEXT NOT NULL,
-     short_code TEXT UNIQUE NOT NULL,
-     created_at TIMESTAMP DEFAULT NOW() NOT NULL,
-     expires_at TIMESTAMP,
-     click_count INTEGER DEFAULT 0 NOT NULL
-   );
-   ```
-
-   Then run the shipped migrations in order (there is no migration runner — apply with `psql`):
+5. **Apply the migrations** (in order; there is no migration runner — apply with `psql`):
 
    ```
+   psql -U postgres -d url_shortener -f src/db/migrations/create_urls_table.sql
    psql -U postgres -d url_shortener -f src/db/migrations/create_users_table.sql
    psql -U postgres -d url_shortener -f src/db/migrations/add_user_id_to_urls.sql
    ```
 
-   `add_user_id_to_urls.sql` adds `user_id`, removes rows without an owner (V1 rows predate ownership), and enforces `NOT NULL` with a foreign key to `users(id)`.
+   - `create_urls_table.sql` — the V1 `urls` table (id, original_url, short_code, created_at, expires_at, click_count).
+   - `create_users_table.sql` — the `users` table.
+   - `add_user_id_to_urls.sql` — adds `user_id`, removes rows without an owner (V1 rows predate ownership), and enforces `NOT NULL` with a foreign key to `users(id)`.
 
 6. **Start the server**
 
