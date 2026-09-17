@@ -402,4 +402,4 @@ The project has no automated test framework — behavior was verified manually a
 
 This README documents **URL Shortener V3**.
 
-V4 in progress
+V4 in progress - rate limiting (Fixed window algo)
