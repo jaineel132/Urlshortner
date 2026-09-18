@@ -1,8 +1,8 @@
-# URL Shortener API — V3
+# URL Shortener API — V4
 
-A backend URL shortening service built with Node.js, Express, and PostgreSQL, with Redis caching.
+A backend URL shortening service built with Node.js, Express, and PostgreSQL, with Redis caching and rate limiting.
 
-V1 shortens URLs with custom aliases, expiration, and click tracking. **V2** adds user accounts: registration, login, bcrypt password hashing, JWT access + refresh tokens, JWT authentication middleware, protected routes, and per-user URL ownership. **V3** adds **Redis caching** for the public redirect (`GET /:shortcode`) using a cache-aside pattern — PostgreSQL remains the source of truth.
+V1 shortens URLs with custom aliases, expiration, and click tracking. **V2** adds user accounts: registration, login, bcrypt password hashing, JWT access + refresh tokens, JWT authentication middleware, protected routes, and per-user URL ownership. **V3** adds **Redis caching** for the public redirect (`GET /:shortcode`) using a cache-aside pattern — PostgreSQL remains the source of truth. **V4** adds **Redis-backed rate limiting** (fixed-window) for login, register, authenticated actions, and public redirects — with fail-open behavior when Redis is down.
 
 ## Features
 
@@ -25,6 +25,8 @@ V1 shortens URLs with custom aliases, expiration, and click tracking. **V2** add
 - Cache invalidation on URL deletion
 - Graceful fallback to PostgreSQL when Redis is unavailable
 - Layered backend architecture
+- Redis-backed rate limiting (fixed-window)
+- 429 responses with Retry-After header
 
 ## Architecture
 
@@ -45,7 +47,7 @@ Redis / PostgreSQL
 | Layer | Responsibility |
 |---|---|
 | **Route** | Maps HTTP paths to middleware + controllers (`src/routes/`) |
-| **Middleware** | Cross-cutting request checks: input validation, JWT authentication (`src/middleware/`) |
+| **Middleware** | Cross-cutting request checks: input validation, JWT authentication, rate limiting (`src/middleware/`) |
 | **Controller** | Reads request data, calls the service, builds HTTP responses, forwards errors to the global error handler (`src/controllers/`) |
 | **Service** | Business logic — shortcode collision retries, expiry checks, cache-aside orchestration, password hashing/comparison, error mapping (`src/services/`) |
 | **Repository / cache layer** | Raw parameterized SQL (`src/repositories/`) plus Redis cache operations (`src/cache/`) |
@@ -102,6 +104,42 @@ Cache code lives in `src/cache/`:
 
 - `src/cache/redisClient.js` — the shared Redis connection (created once, connected at startup, reused for all requests — never connected/quit per request).
 - `src/cache/urlCache.js` — `getCachedURL`, `setCachedURL`, `invalidateCachedURL` + TTL and key-format constants.
+
+## Rate Limiting (V4)
+
+API routes are rate limited with a Redis-backed fixed-window algorithm. Counters live in Redis; the middleware factory is `src/middleware/rateLimiter.js` and all limit configuration is centralized in `src/config/rateLimits.js`. There is no API-key limiting and no sliding-window / token-bucket implementation.
+
+**Algorithm** — each request groups itself into a window with `windowId = Math.floor(Date.now() / 1000 / windowSeconds)`. A single atomic Lua script runs `INCR` on the key and, only when the count is `1` (window just opened), applies `EXPIRE` with the window size — so the TTL is set once when the window starts and is never reset by later requests. When `current > limit` the request gets **429** with a `Retry-After` header and `{ "error": "Too many requests", "retryAfterSeconds": ... }`.
+
+**Key format** — `rate:<scope>:<identifier>:<windowId>`
+
+| Scope | Identity | Routes | Limit | Window |
+|---|---|---|---|---|
+| `rate:login` | `req.ip` | `POST /auth/login` | 10 | 60s |
+| `rate:register` | `req.ip` | `POST /auth/register` | 5 | 3600s |
+| `rate:user` | `req.user.id` (JWT) | `POST /shorten`, `GET /urls`, `DELETE /:shortcode` | 30 | 60s |
+| `rate:redirect` | `req.ip` | `GET /:shortcode` | 100 | 60s |
+
+Limits are per-window and adjustable in one place, `src/config/rateLimits.js`.
+
+**Identity strategy** — public scopes key on `req.ip`; the authenticated scope keys on the verified JWT's user id. Separate `login` / `register` scopes mean a login flood can never burn the register budget or vice versa. The `user` scope is shared across all three authenticated routes, so a burst of URL creation counts against listing and deletion too.
+
+IP-based limits use `req.ip`. When deployed behind a trusted reverse proxy/load balancer, Express trust-proxy configuration must be set correctly so the client IP is identified safely.
+
+**Middleware ordering** — the limiter runs inside each route's pipeline; on authenticated routes it sits after `authMiddleware` (so the user id exists) and before validation, meaning malformed/brute-force attempts still consume budget:
+
+```
+POST /auth/register  → registerLimiter → validate → controller
+POST /auth/login     → loginLimiter → validate → controller
+POST /shorten        → authMiddleware → userLimiter → validate → controller
+GET /urls            → authMiddleware → userLimiter → controller
+DELETE /:shortcode   → authMiddleware → userLimiter → controller
+GET /:shortcode      → redirectLimiter → controller
+```
+
+`/health` is not rate limited.
+
+**Fail-open** — the limiter reuses the shared `redisClient`. If Redis is not ready (`isReady !== true`) or the operation throws, the error is logged and the request proceeds. Rate limiting never produces a 500; when Redis comes back the counters restart from zero.
 
 ## Authentication Flow
 
@@ -184,6 +222,8 @@ Client-supplied `user_id` (in the request body, query, or path) is never trusted
 
 `GET /urls` is declared before `GET /:shortcode` in the router so `urls` is not treated as a shortcode.
 
+All endpoints except `/health` are rate limited — see [Rate Limiting (V4)](#rate-limiting-v4).
+
 ### Authenticated
 
 All protected endpoints require the header:
@@ -197,6 +237,8 @@ Authorization: Bearer <access_token>
 | `POST` | `/shorten` | Create a short URL owned by you |
 | `GET` | `/urls` | List your URLs |
 | `DELETE` | `/:shortcode` | Delete your own short URL |
+
+All endpoints except `/health` are rate limited — see [Rate Limiting (V4)](#rate-limiting-v4).
 
 ### Examples
 
@@ -386,6 +428,15 @@ The project has no automated test framework — behavior was verified manually a
 - Redis down: with the Redis container stopped, redirects still work from PostgreSQL and return no 500s; behavior recovers when Redis is restarted
 - Click counting: every valid redirect increments `click_count` (cache hits included); expired redirects never increment
 
+**V4 cases (rate limiting):**
+
+- Fixed window: after `limit` requests within a window, further requests return 429 with a `Retry-After` header and a `retryAfterSeconds` body field
+- Separate counters: login and register increments do not share a budget; a `/shorten` flood does not affect another user's budget
+- Shared user budget: `/shorten`, `/urls`, and `DELETE /:shortcode` consume the same `rate:user:<id>` counter
+- TTL is set once on the first hit of a window and is not reset by later requests (fixed window, not sliding)
+- `/health` is never rate limited
+- Redis fail-open: with the Redis container stopped, rate-limited endpoints still respond (no 429s, no 500s) and limiting resumes after the container is restarted
+
 ## Security Notes
 
 - Passwords are hashed with **bcrypt** (raw passwords or hashes are never returned or logged)
@@ -397,9 +448,9 @@ The project has no automated test framework — behavior was verified manually a
 - Only URL redirect data (`original_url`, `expires_at`) is cached — never passwords, password hashes, tokens, or user records
 - Cache-busting on delete prevents one user's cached URL from surviving after another user's actions
 - Secrets are stored in environment variables (`.env` is git-ignored)
+- Rate limiting protects login/register from credential-stuffing floods, bounds per-user API use, and caps public redirect traffic
+- Rate limit counters are keyed on the verified JWT user id (authenticated routes) or `req.ip` (public routes), never on client-supplied ids
 
 ---
 
-This README documents **URL Shortener V3**.
-
-V4 in progress - rate limiting (Fixed window algo)
+This README documents **URL Shortener V4**.
