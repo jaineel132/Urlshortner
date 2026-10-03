@@ -4,7 +4,8 @@
   "type": "module",
   "description": "A backend-focused URL shortener project built as part of my backend engineering roadmap.",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "worker": "node src/analytics/analyticsWorker.js"
   },
   "repository": {
     "type": "git",
@@ -19,8 +20,10 @@
   "homepage": "https://github.com/jaineel132/Urlshortner#readme",
   "dependencies": {
     "bcrypt": "^6.0.0",
+    "bullmq": "^6.3.11",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "ioredis": "^6.0.0",
     "jsonwebtoken": "^9.0.3",
     "pg": "^8.23.0",
     "redis": "^6.2.1"

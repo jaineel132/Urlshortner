@@ -1,4 +1,6 @@
 import {shortenURL,getOriginalURL,deleteShortURL,getURLsByUser} from "../services/urlService.js";
+import { addAnalyticsJob } from "../analytics/analyticsQueue.js";
+import crypto from "node:crypto";
 
 async function shortenURLController(req, res) {
     const { original_url, custom_alias, expires_at } = req.body;
@@ -10,6 +12,19 @@ async function shortenURLController(req, res) {
 async function getOriginalURLController(req, res) {
     const { shortcode } = req.params;
     const result = await getOriginalURL(shortcode);
+
+    try {
+        await addAnalyticsJob({
+            eventId: crypto.randomUUID(),
+            shortCode: shortcode,
+            clickedAt: new Date().toISOString(),
+            userAgent: req.headers["user-agent"] ?? null,
+            referrer: req.headers["referer"] ?? null
+        });
+    } catch (error) {
+        console.error("Analytics enqueue failed - continuing redirect:", error.message);
+    }
+
     res.redirect(result.original_url);
 }
 
