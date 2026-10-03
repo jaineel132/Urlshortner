@@ -2,7 +2,10 @@
 
 A backend URL shortening service built with Node.js, Express, and PostgreSQL, with Redis caching and rate limiting.
 
-V1 shortens URLs with custom aliases, expiration, and click tracking. **V2** adds user accounts: registration, login, bcrypt password hashing, JWT access + refresh tokens, JWT authentication middleware, protected routes, and per-user URL ownership. **V3** adds **Redis caching** for the public redirect (`GET /:shortcode`) using a cache-aside pattern — PostgreSQL remains the source of truth. **V4** adds **Redis-backed rate limiting** (fixed-window) for login, register, authenticated actions, and public redirects — with fail-open behavior when Redis is down.
+**V1** shortens URLs with custom aliases, expiration, and click tracking. 
+**V2** adds user accounts: registration, login, bcrypt password hashing, JWT access + refresh tokens, JWT authentication middleware, protected routes, and per-user URL ownership. 
+**V3** adds **Redis caching** for the public redirect (`GET /:shortcode`) using a cache-aside pattern — PostgreSQL remains the source of truth. 
+**V4** adds **Redis-backed rate limiting** (fixed-window) for login, register, authenticated actions, and public redirects — with fail-open behavior when Redis is down.
 
 ## Features
 
