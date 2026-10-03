@@ -1,11 +1,12 @@
-# URL Shortener API — V4
+# URL Shortener API — V5
 
-A backend URL shortening service built with Node.js, Express, and PostgreSQL, with Redis caching and rate limiting.
+A backend URL shortening service built with Node.js, Express, PostgreSQL, and Redis caching and rate limiting.
 
 **V1** shortens URLs with custom aliases, expiration, and click tracking. 
 **V2** adds user accounts: registration, login, bcrypt password hashing, JWT access + refresh tokens, JWT authentication middleware, protected routes, and per-user URL ownership. 
 **V3** adds **Redis caching** for the public redirect (`GET /:shortcode`) using a cache-aside pattern — PostgreSQL remains the source of truth. 
 **V4** adds **Redis-backed rate limiting** (fixed-window) for login, register, authenticated actions, and public redirects — with fail-open behavior when Redis is down.
+**V5** adds **asynchronous click analytics** using BullMQ + Redis + a separate worker process — every successful redirect enqueues an analytics job with event metadata (user agent, referrer, timestamp) that is persisted to PostgreSQL with idempotent deduplication and retry/backoff.
 
 ## Features
 
@@ -30,6 +31,8 @@ A backend URL shortening service built with Node.js, Express, and PostgreSQL, wi
 - Layered backend architecture
 - Redis-backed rate limiting (fixed-window)
 - 429 responses with Retry-After header
+- Asynchronous click analytics via BullMQ worker
+- Idempotent analytics event persistence with retry/backoff
 
 ## Architecture
 
@@ -143,6 +146,59 @@ GET /:shortcode      → redirectLimiter → controller
 `/health` is not rate limited.
 
 **Fail-open** — the limiter reuses the shared `redisClient`. If Redis is not ready (`isReady !== true`) or the operation throws, the error is logged and the request proceeds. Rate limiting never produces a 500; when Redis comes back the counters restart from zero.
+
+## Analytics (V5)
+
+Every successful `GET /:shortcode` redirect enqueues an analytics job to a BullMQ queue backed by Redis. A separate worker process consumes these jobs and persists analytics events to PostgreSQL.
+
+### Algorithm
+
+1. After a valid, non-expired redirect (cache HIT or MISS), the controller builds an analytics event:
+   - `eventId`: `crypto.randomUUID()` (unique per click)
+   - `shortCode`: from the route parameter
+   - `clickedAt`: ISO timestamp of the redirect
+   - `userAgent`: from `req.headers["user-agent"]`
+   - `referrer`: from `req.headers["referer"]`
+2. The event is enqueued via `analyticsQueue.add("record-click", event, { attempts: 3, backoff: { type: "exponential", delay: 1000 }, removeOnComplete: { age: 3600, count: 1000 }, removeOnFail: false })`.
+3. Enqueue is **best-effort**: failures are logged but never break the redirect (fail-open).
+3. The worker (separate process) consumes `record-click` jobs, inserts the event into `analytics_events` with `ON CONFLICT (event_id) DO NOTHING` — duplicate `event_id` is treated as success (idempotent).
+4. On DB error the job throws → BullMQ retries with exponential backoff (1s, 2s, 4s... up to 3 attempts). Failed jobs are preserved in Redis for investigation.
+
+### Database
+
+Table: `analytics_events`
+
+| Column | Type | Notes |
+|---|---|---|
+| `event_id` | `TEXT` | PRIMARY KEY |
+| `short_code` | `TEXT` | NOT NULL |
+| `clicked_at` | `TIMESTAMPTZ` | NOT NULL |
+| `user_agent` | `TEXT` | Nullable |
+| `referrer` | `TEXT` | Nullable |
+
+Index: `(short_code, clicked_at DESC)` for time-series queries per URL.
+
+No foreign key to `urls.short_code` (analytics survives URL deletion). No `click_count` column (authoritative count remains in `urls.click_count`). No BullMQ job-status columns.
+
+### Queue & Worker
+
+- **Queue**: `src/analytics/analyticsQueue.js` — BullMQ `Queue("analytics")` with fail-fast Redis connection (rejects immediately when Redis is down, so redirect never blocks).
+- **Worker**: `src/analytics/analyticsWorker.js` — BullMQ `Worker("analytics")` with its own Redis connection (blocking, auto-reconnects). Run with `npm run worker`.
+- **Repository**: `src/repositories/analyticsRepository.js` — idempotent `INSERT ... ON CONFLICT (event_id) DO NOTHING`.
+- **Retry policy**: 3 attempts, exponential backoff starting at 1s. Failed jobs are preserved (`removeOnFail: false`); completed jobs auto-pruned after 1h or 1000 entries.
+
+### Idempotency
+
+`event_id` is the PRIMARY KEY. The `ON CONFLICT (event_id) DO NOTHING` clause means:
+- Same event processed twice → second insert returns `rowCount = 0` → treated as success.
+- Worker crashes mid-job and BullMQ retries → same `event_id` → no duplicate row.
+- No separate deduplication table or job-status column needed.
+
+### Fail-open
+
+- Enqueue failures (Redis down, timeout) are logged and the redirect proceeds normally.
+- Worker DB failures throw → BullMQ retries; after exhaustion the job stays in the failed set for manual inspection.
+- Analytics never turns a successful redirect into a 500.
 
 ## Authentication Flow
 
@@ -332,7 +388,21 @@ Content-Type: application/json
 
 Constraints: `users.email` is UNIQUE, `urls.short_code` is UNIQUE, and `urls.user_id` is NOT NULL and references `users(id)`.
 
-PostgreSQL holds the authoritative state (URLs, ownership, `expires_at`, `click_count`). Redis is only a cache of `{ original_url, expires_at }` for public redirects.
+### `analytics_events`
+
+| Column | Type | Notes |
+|---|---|---|
+| `event_id` | `TEXT` | PRIMARY KEY |
+| `short_code` | `TEXT` | NOT NULL |
+| `clicked_at` | `TIMESTAMPTZ` | NOT NULL |
+| `user_agent` | `TEXT` | Nullable |
+| `referrer` | `TEXT` | Nullable |
+
+Index: `(short_code, clicked_at DESC)`.
+
+No foreign key to `urls.short_code`. Analytics events survive URL deletion. `click_count` remains authoritative in `urls`.
+
+PostgreSQL holds the authoritative state (URLs, ownership, `expires_at`, `click_count`, analytics events). Redis is only a cache of `{ original_url, expires_at }` for public redirects and the BullMQ queue backend.
 
 ## Environment Variables
 
@@ -385,23 +455,33 @@ PostgreSQL holds the authoritative state (URLs, ownership, `expires_at`, `click_
 
 5. **Apply the migrations** (in order; there is no migration runner — apply with `psql`):
 
-   ```
-   psql -U postgres -d url_shortener -f src/db/migrations/create_urls_table.sql
-   psql -U postgres -d url_shortener -f src/db/migrations/create_users_table.sql
-   psql -U postgres -d url_shortener -f src/db/migrations/add_user_id_to_urls.sql
-   ```
+    ```
+    psql -U postgres -d url_shortener -f src/db/migrations/create_urls_table.sql
+    psql -U postgres -d url_shortener -f src/db/migrations/create_users_table.sql
+    psql -U postgres -d url_shortener -f src/db/migrations/add_user_id_to_urls.sql
+    psql -U postgres -d url_shortener -f src/db/migrations/create_analytics_events_table.sql
+    ```
 
-   - `create_urls_table.sql` — the V1 `urls` table (id, original_url, short_code, created_at, expires_at, click_count).
-   - `create_users_table.sql` — the `users` table.
-   - `add_user_id_to_urls.sql` — adds `user_id`, removes rows without an owner (V1 rows predate ownership), and enforces `NOT NULL` with a foreign key to `users(id)`.
+    - `create_urls_table.sql` — the V1 `urls` table (id, original_url, short_code, created_at, expires_at, click_count).
+    - `create_users_table.sql` — the `users` table.
+    - `add_user_id_to_urls.sql` — adds `user_id`, removes rows without an owner (V1 rows predate ownership), and enforces `NOT NULL` with a foreign key to `users(id)`.
+    - `create_analytics_events_table.sql` — the V5 `analytics_events` table (event_id PK, short_code, clicked_at, user_agent, referrer) + index.
 
 6. **Start the server**
 
-   ```
-   node server.js
-   ```
+    ```
+    node server.js
+    ```
 
-   The server verifies the PostgreSQL and Redis connections on startup and reports whether each is reachable.
+    The server verifies the PostgreSQL and Redis connections on startup and reports whether each is reachable.
+
+7. **Start the analytics worker** (in a separate terminal)
+
+    ```
+    npm run worker
+    ```
+
+    The worker consumes analytics jobs from the BullMQ queue and persists events to PostgreSQL. It runs as a separate process; if it is not running, analytics events are enqueued but not processed until the worker starts (jobs wait in Redis).
 
 ## Testing
 
@@ -440,6 +520,19 @@ The project has no automated test framework — behavior was verified manually a
 - `/health` is never rate limited
 - Redis fail-open: with the Redis container stopped, rate-limited endpoints still respond (no 429s, no 500s) and limiting resumes after the container is restarted
 
+**V5 cases (analytics):**
+
+- Valid redirect (cache HIT or MISS) → analytics job enqueued with unique `eventId`, `shortCode`, `clickedAt`, `userAgent`, `referrer`
+- 404 (nonexistent shortcode) → no analytics event
+- 410 (expired URL) → no analytics event
+- Cache HIT and cache MISS both produce analytics events
+- BullMQ worker processes job → inserts `analytics_events` row with idempotent `ON CONFLICT (event_id) DO NOTHING`
+- Duplicate `event_id` (worker crash + retry) → single row, no error
+- Worker DB failure → BullMQ retries with exponential backoff (1s, 2s, 4s up to 3 attempts); job succeeds on restore
+- Enqueue failure (Redis down) → logged, redirect still 302, no 500
+- Redis down → jobs wait in BullMQ queue; processed when worker + Redis recover
+- Exactly one `analytics_events` row per unique `event_id`
+
 ## Security Notes
 
 - Passwords are hashed with **bcrypt** (raw passwords or hashes are never returned or logged)
@@ -453,9 +546,10 @@ The project has no automated test framework — behavior was verified manually a
 - Secrets are stored in environment variables (`.env` is git-ignored)
 - Rate limiting protects login/register from credential-stuffing floods, bounds per-user API use, and caps public redirect traffic
 - Rate limit counters are keyed on the verified JWT user id (authenticated routes) or `req.ip` (public routes), never on client-supplied ids
+- Analytics events contain only `short_code`, timestamp, user agent, referrer — no PII, no tokens, no passwords
+- Analytics `event_id` is a UUID (v4) — not predictable, not derived from user data
+- BullMQ queue and worker use dedicated Redis connections; queue connection fails fast so redirect latency is never affected
 
 ---
 
-This README documents **URL Shortener V4**.
-
-V5 in progresss
+This README documents **URL Shortener V5**.
