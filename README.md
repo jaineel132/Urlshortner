@@ -483,6 +483,56 @@ PostgreSQL holds the authoritative state (URLs, ownership, `expires_at`, `click_
 
     The worker consumes analytics jobs from the BullMQ queue and persists events to PostgreSQL. It runs as a separate process; if it is not running, analytics events are enqueued but not processed until the worker starts (jobs wait in Redis).
 
+## Docker
+
+The whole stack (API + worker + PostgreSQL + Redis) can run with Docker Compose.
+
+**Prerequisites**
+
+- Docker with Compose v2 (`docker compose version`)
+- A `.env` file in the project root with the required variables (same names as `.env.example`):
+  - Required: `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `JWT_SECRET`, `JWT_REFRESH_SECRET`
+  - Optional: `BASE_URL` (defaults to `http://localhost:3000`)
+
+Compose fails with a clear configuration error if a required variable is missing. Secrets are passed at runtime and never baked into the image.
+
+**First start**
+
+```
+docker compose up --build -d
+```
+
+This builds the app image once and uses it for both the `api` and `worker` services, starts `postgres` and `redis`, waits for their health checks, then starts the API (published on `http://localhost:3000`) and the worker.
+
+**Check health and logs**
+
+```
+docker compose ps
+docker compose logs -f api worker
+curl http://localhost:3000/health
+```
+
+**Database migrations**
+
+The migrations run automatically **only on the first initialization** of the PostgreSQL data volume, through `docker/postgres/init/01-run-migrations.sql`, which includes the existing files from `src/db/migrations/` in this exact order:
+
+1. `create_urls_table.sql`
+2. `create_users_table.sql`
+3. `add_user_id_to_urls.sql` (not idempotent — never rerun it against an initialized database)
+4. `create_analytics_events_table.sql`
+
+PostgreSQL's official entrypoint ignores `/docker-entrypoint-initdb.d/` when the data directory already exists, so later starts reuse the existing schema. Applying migrations manually is not needed for a fresh Docker volume.
+
+**Stop**
+
+```
+docker compose down
+```
+
+Stops and removes the containers but keeps the named volumes (`pgdata`, `redisdata`) — data survives.
+
+> **Warning:** `docker compose down -v` also deletes the named volumes and **all data** (database rows, Redis queue/cache). Use it only when you intend to start from a clean slate.
+
 ## Testing
 
 The project has no automated test framework — behavior was verified manually against the live server with `curl` / REST requests.
