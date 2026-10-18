@@ -4,7 +4,8 @@
   "type": "module",
   "description": "A backend-focused URL shortener project built as part of my backend engineering roadmap.",
   "scripts": {
-    "test": "node --test",
+    "test": "node --test tests/generateShortCode.test.js",
+    "test:integration": "node --test tests/urlRepository.integration.test.js",
     "worker": "node src/analytics/analyticsWorker.js"
   },
   "repository": {
